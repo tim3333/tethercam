@@ -234,6 +234,8 @@ video.vf { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: 
       <input id="codeIn" maxlength="4" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="····" aria-label="Pairing code">
       <div class="err" id="connErr"></div>
       <button class="bigbtn" id="connectBtn" type="submit">Connect</button>
+      <button class="txtbtn" id="boostBtn" type="button" hidden>Retry with Wi-Fi boost</button>
+      <p id="boostNote" style="font-size:13px" hidden>Wi-Fi boost asks for microphone permission once and switches the mic straight off. Chrome only reveals this phone's local network address to pages that have it, and that address helps phones on the same Wi-Fi link directly.</p>
       <button class="linkbtn" id="connBack" type="button">Back</button>
     </form>
   </div>
@@ -263,6 +265,20 @@ const PEER_OPTS = { debug: 1, config: { iceServers: [
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:global.stun.twilio.com:3478' }
 ] } };
+const ICE_WORDS = { new: 'starting', checking: 'finding a route', connected: 'linked', completed: 'linked', failed: 'route failed', disconnected: 'dropped', closed: 'closed' };
+// Reports the phone-to-phone link state of a PeerJS connection while it is being set up
+function watchIce(conn, report) {
+  let last = '';
+  const iv = setInterval(() => {
+    const pc = conn.peerConnection;
+    if (!pc) return;
+    const s = pc.iceConnectionState;
+    if (s !== last) { last = s; report(s, ICE_WORDS[s] || s); }
+    if (s === 'connected' || s === 'completed' || s === 'closed') clearInterval(iv);
+  }, 300);
+  setTimeout(() => clearInterval(iv), 60000);
+  return () => last;
+}
 const CHUNK = 16000;
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -383,6 +399,8 @@ function registerCamPeer(code) {
     if (camConn) { try { camConn.close(); } catch {} }
     if (camCall) { try { camCall.close(); } catch {} }
     camConn = conn;
+    setCamStatus('Remote found · linking…', 'wait');
+    watchIce(conn, (s, w) => { if (!conn.open) setCamStatus('Remote found · ' + w, s === 'failed' ? 'bad' : 'wait'); });
     conn.on('open', () => {
       setCamStatus('Remote connected', 'ok');
       $('codeCard').hidden = true; $('camHideCode').textContent = 'Show code';
@@ -557,8 +575,25 @@ $('connectForm').addEventListener('submit', e => {
   connectTo(code);
 });
 
-function connectTo(code) {
+async function wifiBoost() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(t => t.stop());
+    store.set('boost', '1');
+    return true;
+  } catch { return false; }
+}
+$('boostBtn').onclick = async () => {
+  const code = $('codeIn').value.trim().toUpperCase();
+  if (!(await wifiBoost())) { $('connErr').textContent = 'Microphone permission was refused, so the boost could not turn on.'; return; }
+  connectTo(code);
+};
+
+async function connectTo(code) {
   $('connErr').textContent = '';
+  $('boostBtn').hidden = true; $('boostNote').hidden = true;
+  // Once boost has been granted, re-confirm it each time so Chrome keeps exposing the local address
+  if (store.get('boost') === '1') await wifiBoost();
   $('connectBtn').disabled = true; $('connectBtn').textContent = 'Connecting…';
   store.set('lastCode', code);
   if (remPeer) { try { remPeer.destroy(); } catch {} }
@@ -567,10 +602,21 @@ function connectTo(code) {
     $('connectBtn').disabled = false; $('connectBtn').textContent = 'Connect';
     $('connectPane').hidden = false; $('connErr').textContent = msg;
   };
-  const failT = setTimeout(() => { if (!remConn || !remConn.open) fail('No answer. Check that the camera phone shows this code and has internet.'); }, 15000);
+  let stage = 'reaching the connection server';
+  let iceState = () => '';
+  const progress = txt => { stage = txt; $('connectBtn').textContent = txt.charAt(0).toUpperCase() + txt.slice(1) + '…'; };
+  progress('reaching the connection server');
+  const failT = setTimeout(() => {
+    if (remConn && remConn.open) return;
+    const s = iceState();
+    if (!s || s === 'new') fail(`No answer while ${stage}. Make sure the camera phone is on its "Waiting for the remote" screen, then try again.`);
+    else { fail(`The phones found each other but could not link (${ICE_WORDS[s] || s}). Tap "Retry with Wi-Fi boost" below.`); $('boostBtn').hidden = false; $('boostNote').hidden = false; }
+  }, 30000);
   remPeer.on('open', () => {
+    progress('looking for the camera');
     const conn = remPeer.connect(PREFIX + code, { reliable: true, serialization: 'binary' });
     remConn = conn;
+    iceState = watchIce(conn, (s, w) => { if (!conn.open) progress(w); });
     conn.on('open', () => {
       clearTimeout(failT);
       $('connectPane').hidden = true;
