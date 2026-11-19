@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0c0e0d">
+<title>Tether Cam</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+/* Layout: full-bleed viewfinder, controls float over it like a camera body. Single dark look by choice. */
+:root {
+  --bg: #0c0e0d;
+  --panel: rgba(18, 21, 20, .78);
+  --line: #2a302d;
+  --fg: #eef2ef;
+  --muted: #8d9892;
+  --accent: #ffb547;   /* tally amber */
+  --rec: #ff4d4d;
+  --ok: #4fd18b;
+  --display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--body); overflow: hidden; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+/* Home */
+#home { padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); justify-content: center; align-items: center; overflow-y: auto; }
+.home-inner { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 28px; }
+.brand { font: 700 34px/1.05 var(--display); letter-spacing: -.02em; margin: 0; }
+.brand span { color: var(--accent); }
+.lede { color: var(--muted); margin: 8px 0 0; }
+.roles { display: grid; gap: 14px; }
+.role { text-align: left; padding: 20px; border: 1px solid var(--line); border-radius: 18px; background: #121514; display: grid; grid-template-columns: 52px 1fr; gap: 4px 16px; align-items: center; transition: border-color .15s, transform .1s; }
+.role:active { transform: scale(.985); }
+.role:hover { border-color: var(--accent); }
+.role svg { grid-row: span 2; width: 52px; height: 52px; padding: 12px; border-radius: 14px; background: #1b201e; color: var(--accent); }
+.role b { font: 600 17px var(--display); }
+.role small { color: var(--muted); font-size: 13px; }
+.foot { color: var(--muted); font-size: 12.5px; }
+
+/* Shared viewfinder */
+video.vf { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.topbar { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top) + 12px) max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left)); background: linear-gradient(#000a, #0000); z-index: 5; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); backdrop-filter: blur(8px); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.dot.wait { background: var(--accent); animation: blink 1.2s infinite; }
+.dot.bad { background: var(--rec); }
+@keyframes blink { 50% { opacity: .3; } }
+.spacer { flex: 1; }
+.iconbtn { width: 44px; height: 44px; border-radius: 50%; background: var(--panel); backdrop-filter: blur(8px); display: grid; place-items: center; flex: none; }
+.iconbtn svg { width: 22px; height: 22px; }
+.iconbtn.on { background: var(--accent); color: #1a1205; }
+.iconbtn:disabled { opacity: .35; }
+.iconbtn .lbl { font: 600 13px var(--display); }
+
+/* Camera side */
+.codecard { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; background: var(--panel); backdrop-filter: blur(10px); padding: 22px 28px; border-radius: 20px; z-index: 4; width: min(320px, calc(100% - 32px)); }
+.codecard .k { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.code { font: 700 56px/1.1 var(--display); letter-spacing: .18em; color: var(--accent); margin: 6px 0 6px .18em; font-variant-numeric: tabular-nums; }
+.codecard p { margin: 0; color: var(--muted); font-size: 13px; }
+.cambottom { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 10px; justify-content: center; padding: 14px max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 18px) max(14px, env(safe-area-inset-left)); background: linear-gradient(#0000, #000a); z-index: 5; flex-wrap: wrap; }
+.txtbtn { padding: 11px 18px; border-radius: 999px; background: var(--panel); backdrop-filter: blur(8px); font-weight: 600; font-size: 14px; }
+.txtbtn.primary { background: var(--accent); color: #1a1205; }
+#dim { position: fixed; inset: 0; background: #000; z-index: 50; display: grid; place-items: center; color: #333; font-size: 13px; text-align: center; }
+#dim .rec-mini { color: var(--rec); font-weight: 600; }
+.countdown { position: absolute; inset: 0; display: grid; place-items: center; font: 700 30vmin/1 var(--display); color: #fff; text-shadow: 0 4px 30px #000c; z-index: 6; pointer-events: none; }
+.flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 7; }
+.flash.go { animation: flash .35s ease-out; }
+@keyframes flash { 0% { opacity: .85; } 100% { opacity: 0; } }
+.recbadge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--rec); color: #fff; font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.recbadge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+
+/* Remote side: connect form */
+.connect { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left)); z-index: 8; background: var(--bg); }
+.connect form { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 16px; }
+.connect h2 { font: 700 26px var(--display); margin: 0; }
+.connect p { margin: 0; color: var(--muted); }
+#codeIn { width: 100%; font: 700 44px var(--display); letter-spacing: .3em; text-align: center; text-transform: uppercase; padding: 14px 0 14px .3em; border-radius: 16px; border: 1px solid var(--line); background: #121514; color: var(--accent); }
+.err { color: var(--rec); font-size: 14px; min-height: 1.4em; }
+.bigbtn { padding: 16px; border-radius: 16px; background: var(--accent); color: #1a1205; font: 600 17px var(--display); }
+.bigbtn:disabled { opacity: .5; }
+.linkbtn { color: var(--muted); font-size: 14px; padding: 8px; }
+
+/* Remote side: controls */
+.grid { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - .5px), #fff5 calc(33.333% - .5px), #fff5 calc(33.333% + .5px), transparent calc(33.333% + .5px), transparent calc(66.666% - .5px), #fff5 calc(66.666% - .5px), #fff5 calc(66.666% + .5px), transparent calc(66.666% + .5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - .5px), #fff5 calc(33.333% - .5px), #fff5 calc(33.333% + .5px), transparent calc(33.333% + .5px), transparent calc(66.666% - .5px), #fff5 calc(66.666% - .5px), #fff5 calc(66.666% + .5px), transparent calc(66.666% + .5px)); }
+.waiting { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); z-index: 1; text-align: center; padding: 0 24px; }
+.dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 10px max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 18px) max(14px, env(safe-area-inset-left)); background: linear-gradient(#0000, #000c 40%); display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.zoomrow { display: flex; align-items: center; gap: 10px; width: min(420px, 100%); }
+.zoomrow input { flex: 1; accent-color: var(--accent); }
+.zoomrow output { min-width: 46px; text-align: right; font: 600 14px var(--display); font-variant-numeric: tabular-nums; }
+.modes { display: flex; gap: 6px; background: var(--panel); padding: 4px; border-radius: 999px; }
+.modes button { padding: 6px 16px; border-radius: 999px; font: 600 13px var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.modes button[aria-pressed="true"] { background: #fff1; color: var(--accent); }
+.shutterrow { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; width: min(420px, 100%); }
+.thumb { width: 52px; height: 52px; border-radius: 12px; background: #1b201e center/cover; border: 2px solid #fff3; justify-self: start; position: relative; overflow: hidden; }
+.thumb .prog { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--accent); width: 0; transition: width .1s; }
+.thumb .badge { position: absolute; top: -2px; right: -2px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: #1a1205; font: 700 11px/18px var(--display); padding: 0 5px; text-align: center; }
+.shutter { width: 78px; height: 78px; border-radius: 50%; border: 4px solid #fff; display: grid; place-items: center; }
+.shutter::after { content: ""; width: 62px; height: 62px; border-radius: 50%; background: #fff; transition: all .15s; }
+.shutter:active::after { transform: scale(.9); }
+.shutter.video::after { background: var(--rec); }
+.shutter.video.recording::after { width: 30px; height: 30px; border-radius: 8px; }
+.shutter:disabled { opacity: .4; }
+.rightslot { justify-self: end; }
+
+/* Gallery viewer */
+#viewer { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; }
+#viewer .media { flex: 1; min-height: 0; display: grid; place-items: center; }
+#viewer img, #viewer video { max-width: 100%; max-height: 100%; object-fit: contain; }
+#viewer .bar { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 12px max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 14px) max(14px, env(safe-area-inset-left)); }
+#viewer .meta { text-align: center; color: var(--muted); font-size: 12.5px; padding-top: 8px; font-variant-numeric: tabular-nums; }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding: 8px max(14px, env(safe-area-inset-left)); }
+.strip button { width: 54px; height: 54px; flex: none; border-radius: 10px; background: #1b201e center/cover; border: 2px solid transparent; position: relative; }
+.strip button.sel { border-color: var(--accent); }
+.strip button.vid::after { content: "▶"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 16px; text-shadow: 0 1px 4px #000; }
+
+.toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 190px); transform: translateX(-50%); background: var(--panel); backdrop-filter: blur(8px); padding: 10px 16px; border-radius: 12px; z-index: 30; font-size: 14px; max-width: calc(100% - 32px); text-align: center; }
+@media (prefers-reduced-motion: reduce) { .flash.go, .dot.wait, .recbadge::before { animation: none; } }
+</style>
+</head>
+<body>
+
+<!-- HOME -->
+<section id="home" class="screen">
+  <div class="home-inner">
+    <div>
+      <h1 class="brand">Tether<span>Cam</span></h1>
+      <p class="lede">Turn one phone into a wireless camera and control it from another. Open this page on both phones and pick a role on each.</p>
+    </div>
+    <div class="roles">
+      <button class="role" id="pickCam" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+        <b>This phone is the camera</b>
+        <small>Use on the S21 Ultra. Mount it, point it, leave it.</small>
+      </button>
+      <button class="role" id="pickRemote" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><circle cx="12" cy="15.5" r="2.4"/><path d="M10 6h4"/></svg>
+        <b>This phone is the remote</b>
+        <small>Use on the S26. Live view, shutter, zoom, saving.</small>
+      </button>
+    </div>
+    <p class="foot">Both phones need internet (same Wi-Fi works best). Photos and videos travel straight from phone to phone and are saved on the remote.</p>
+  </div>
+</section>
+
+<!-- CAMERA -->
+<section id="cam" class="screen" hidden>
+  <video id="camVideo" class="vf" autoplay playsinline muted></video>
+  <div class="flash" id="camFlash"></div>
+  <div class="countdown" id="camCount" hidden></div>
+  <div class="topbar">
+    <span class="pill"><span class="dot wait" id="camDot"></span><span id="camStatus">Starting camera…</span></span>
+    <span class="spacer"></span>
+    <span class="recbadge" id="camRec" hidden>00:00</span>
+  </div>
+  <div class="codecard" id="codeCard">
+    <div class="k">Pairing code</div>
+    <div class="code" id="camCode">····</div>
+    <p>On the other phone, choose <b>This phone is the remote</b> and enter this code.</p>
+  </div>
+  <div class="cambottom">
+    <button class="txtbtn" id="camHideCode" type="button">Hide code</button>
+    <button class="txtbtn primary" id="camDimBtn" type="button">Dim screen</button>
+    <button class="txtbtn" id="camExit" type="button">Stop</button>
+  </div>
+  <div id="dim" hidden>
+    <div>
+      <div id="dimRec" class="rec-mini" hidden>● Recording</div>
+      <div id="dimStatus">Camera running</div>
+      <div>Tap to wake the screen</div>
+    </div>
+  </div>
+</section>
+
+<!-- REMOTE -->
+<section id="remote" class="screen" hidden>
+  <video id="remVideo" class="vf" autoplay playsinline muted></video>
+  <div class="waiting" id="remWaiting">Waiting for the camera's picture…</div>
+  <div class="grid" id="remGrid" hidden></div>
+  <div class="flash" id="remFlash"></div>
+  <div class="countdown" id="remCount" hidden></div>
+
+  <div class="topbar">
+    <button class="iconbtn" id="remBack" type="button" aria-label="Disconnect">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <span class="pill"><span class="dot wait" id="remDot"></span><span id="remStatus">Connecting…</span></span>
+    <span class="spacer"></span>
+    <span class="recbadge" id="remRec" hidden>00:00</span>
+    <button class="iconbtn" id="btnTimer" type="button" aria-label="Self-timer"><span class="lbl" id="timerLbl">OFF</span></button>
+    <button class="iconbtn" id="btnTorch" type="button" aria-label="Flashlight" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>
+    </button>
+    <button class="iconbtn" id="btnGrid" type="button" aria-label="Grid">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
+    </button>
+  </div>
+
+  <div class="dock">
+    <div class="zoomrow" id="zoomRow" hidden>
+      <span class="pill" style="padding:6px 10px">Zoom</span>
+      <input type="range" id="zoom" min="1" max="10" step="0.1" value="1" aria-label="Zoom">
+      <output id="zoomOut">1.0×</output>
+    </div>
+    <div class="modes" role="group" aria-label="Capture mode">
+      <button type="button" id="modePhoto" aria-pressed="true">Photo</button>
+      <button type="button" id="modeVideo" aria-pressed="false">Video</button>
+    </div>
+    <div class="shutterrow">
+      <button class="thumb" id="thumb" type="button" aria-label="Open received photos and videos"><span class="prog" id="prog"></span></button>
+      <button class="shutter" id="shutter" type="button" aria-label="Take photo" disabled></button>
+      <button class="iconbtn rightslot" id="btnFlip" type="button" aria-label="Switch front and back camera" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16m0 4v-4h-4"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="connect" id="connectPane">
+    <form id="connectForm" autocomplete="off">
+      <h2>Connect to the camera</h2>
+      <p>Enter the 4-character code shown on the camera phone.</p>
+      <input id="codeIn" maxlength="4" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="····" aria-label="Pairing code">
+      <div class="err" id="connErr"></div>
+      <button class="bigbtn" id="connectBtn" type="submit">Connect</button>
+      <button class="linkbtn" id="connBack" type="button">Back</button>
+    </form>
+  </div>
+</section>
+
+<!-- VIEWER -->
+<section id="viewer" hidden>
+  <div class="meta" id="vMeta"></div>
+  <div class="media" id="vMedia"></div>
+  <div class="strip" id="vStrip"></div>
+  <div class="bar">
+    <button class="txtbtn primary" id="vSave" type="button">Save to phone</button>
+    <button class="txtbtn" id="vShare" type="button">Share…</button>
+    <button class="txtbtn" id="vClose" type="button">Back to camera</button>
+  </div>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+'use strict';
+const PREFIX = 'tethercam-v1-';
+const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const PEER_OPTS = { debug: 1, config: { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' }
+] } };
+const CHUNK = 16000;
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+
+function show(id) {
+  for (const s of ['home', 'cam', 'remote']) $(s).hidden = s !== id;
+}
+let toastT;
+function toast(msg, ms = 2400) {
+  const t = $('toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, ms);
+}
+function flash(el) { el.classList.remove('go'); void el.offsetWidth; el.classList.add('go'); }
+function fmtTime(s) { const m = Math.floor(s / 60), x = Math.floor(s % 60); return String(m).padStart(2, '0') + ':' + String(x).padStart(2, '0'); }
+function fmtBytes(b) { return b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' KB'; }
+function stamp() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+
+let wakeLock = null;
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) { wakeLock = await navigator.wakeLock.request('screen'); } } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wakeLock) keepAwake(); });
+
+if (typeof Peer === 'undefined') {
+  document.querySelector('.foot').textContent = 'Could not load the connection library. Check your internet connection and reload.';
+}
+
+$('pickCam').onclick = () => { store.set('role', 'cam'); startCameraRole(); };
+$('pickRemote').onclick = () => { store.set('role', 'remote'); startRemoteRole(); };
+
+/* =========================== CAMERA ROLE =========================== */
+let camStream = null, camPeer = null, camConn = null, camCall = null;
+let facing = 'environment', hasAudio = true;
+let recorder = null, recChunks = [], recStart = 0, recTimer = null;
+let torchOn = false;
+
+function setCamStatus(text, state) {
+  $('camStatus').textContent = text; $('dimStatus').textContent = text;
+  $('camDot').className = 'dot ' + state;
+}
+
+async function openCamera() {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  const video = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video, audio: { echoCancellation: false, noiseSuppression: false } });
+    hasAudio = true;
+  } catch (e) {
+    if (e && e.name === 'NotAllowedError' && !camStream) {
+      // maybe mic was refused; try video only
+      camStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      hasAudio = false;
+    } else {
+      camStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      hasAudio = false;
+    }
+  }
+  $('camVideo').srcObject = camStream;
+  $('camVideo').style.transform = facing === 'user' ? 'scaleX(-1)' : '';
+  torchOn = false;
+}
+
+function videoTrack() { return camStream && camStream.getVideoTracks()[0]; }
+
+function camCaps() {
+  const t = videoTrack(); if (!t) return {};
+  const c = t.getCapabilities ? t.getCapabilities() : {};
+  const s = t.getSettings ? t.getSettings() : {};
+  return {
+    t: 'caps', facing,
+    zoom: c.zoom ? { min: c.zoom.min, max: c.zoom.max, step: c.zoom.step || 0.1, value: s.zoom || c.zoom.min } : null,
+    torch: !!c.torch, torchOn,
+    width: s.width, height: s.height, audio: hasAudio,
+    recording: !!(recorder && recorder.state === 'recording')
+  };
+}
+function send(msg) { if (camConn && camConn.open) camConn.send(msg); }
+
+async function startCameraRole() {
+  show('cam');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setCamStatus('This page must be opened over https:// to use the camera', 'bad'); return;
+  }
+  try { await openCamera(); }
+  catch (e) { setCamStatus('Camera blocked: allow camera access for this site and reload', 'bad'); return; }
+  keepAwake();
+  let code = store.get('camCode');
+  if (!code || code.length !== 4) code = newCode();
+  registerCamPeer(code);
+}
+function newCode() {
+  let c = ''; const r = crypto.getRandomValues(new Uint32Array(4));
+  for (const n of r) c += ALPHABET[n % ALPHABET.length];
+  store.set('camCode', c); return c;
+}
+
+function registerCamPeer(code) {
+  $('camCode').textContent = code;
+  setCamStatus('Getting online…', 'wait');
+  if (camPeer) { try { camPeer.destroy(); } catch {} }
+  camPeer = new Peer(PREFIX + code, PEER_OPTS);
+  camPeer.on('open', () => setCamStatus('Ready. Waiting for the remote', 'wait'));
+  camPeer.on('error', err => {
+    if (err.type === 'unavailable-id') { registerCamPeer(newCode()); return; }
+    if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+      setCamStatus('Offline. Retrying…', 'bad');
+      setTimeout(() => { if (camPeer && camPeer.disconnected && !camPeer.destroyed) camPeer.reconnect(); }, 3000);
+      return;
+    }
+    setCamStatus('Connection problem: ' + err.type, 'bad');
+  });
+  camPeer.on('disconnected', () => { if (!camPeer.destroyed) setTimeout(() => { try { camPeer.reconnect(); } catch {} }, 1500); });
+  camPeer.on('connection', conn => {
+    if (camConn) { try { camConn.close(); } catch {} }
+    if (camCall) { try { camCall.close(); } catch {} }
+    camConn = conn;
+    conn.on('open', () => {
+      setCamStatus('Remote connected', 'ok');
+      $('codeCard').hidden = true; $('camHideCode').textContent = 'Show code';
+      camCall = camPeer.call(conn.peer, camStream);
+      send(camCaps());
+    });
+    conn.on('data', d => onCamCommand(d).catch(e => send({ t: 'error', msg: String(e && e.message || e) })));
+    conn.on('close', () => {
+      if (camConn !== conn) return;
+      camConn = null; if (camCall) { try { camCall.close(); } catch {} camCall = null; }
+      setCamStatus('Remote disconnected. Waiting…', 'wait');
+    });
+  });
+}
+
+async function replaceSenderTracks() {
+  if (!camCall || !camCall.peerConnection) return;
+  for (const sender of camCall.peerConnection.getSenders()) {
+    if (!sender.track) continue;
+    const nt = camStream.getTracks().find(t => t.kind === sender.track.kind);
+    if (nt) await sender.replaceTrack(nt);
+  }
+}
+
+async function countdownOn(el, secs) {
+  for (let i = secs; i > 0; i--) { el.textContent = i; el.hidden = false; await sleep(1000); }
+  el.hidden = true;
+}
+
+async function takePhoto() {
+  const track = videoTrack();
+  let blob = null;
+  if ('ImageCapture' in window) {
+    try {
+      const ic = new ImageCapture(track);
+      let opts = {};
+      try {
+        const pc = await ic.getPhotoCapabilities();
+        if (pc.imageWidth && pc.imageWidth.max) opts = { imageWidth: pc.imageWidth.max, imageHeight: pc.imageHeight.max };
+      } catch {}
+      blob = await ic.takePhoto(opts);
+    } catch (e) { blob = null; }
+  }
+  if (!blob) {
+    const v = $('camVideo'); const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+  }
+  return blob;
+}
+
+async function sendFile(blob, kind, name) {
+  if (!camConn || !camConn.open) return;
+  const buf = await blob.arrayBuffer();
+  const id = Date.now().toString(36);
+  send({ t: 'file-start', id, kind, name, mime: blob.type, size: buf.byteLength });
+  const dc = camConn.dataChannel;
+  for (let o = 0; o < buf.byteLength; o += CHUNK) {
+    while (dc && dc.bufferedAmount > 2 * 1024 * 1024) await sleep(20);
+    if (!camConn || !camConn.open) return;
+    camConn.send(buf.slice(o, o + CHUNK));
+  }
+  send({ t: 'file-end', id });
+}
+
+function pickRecMime() {
+  const opts = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  for (const m of opts) if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+async function onCamCommand(d) {
+  if (!d || typeof d !== 'object' || d instanceof ArrayBuffer) return;
+  switch (d.t) {
+    case 'photo': {
+      if (d.delay > 0) { send({ t: 'countdown', s: d.delay }); await countdownOn($('camCount'), d.delay); }
+      flash($('camFlash'));
+      send({ t: 'snapped' });
+      const blob = await takePhoto();
+      await sendFile(blob, 'photo', `TetherCam_${stamp()}.jpg`);
+      break;
+    }
+    case 'rec-start': {
+      if (recorder && recorder.state === 'recording') return;
+      if (d.delay > 0) { send({ t: 'countdown', s: d.delay }); await countdownOn($('camCount'), d.delay); }
+      const mime = pickRecMime();
+      recorder = new MediaRecorder(camStream, mime ? { mimeType: mime, videoBitsPerSecond: 10e6 } : { videoBitsPerSecond: 10e6 });
+      recChunks = [];
+      recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+      recorder.onstop = async () => {
+        clearInterval(recTimer); $('camRec').hidden = true; $('dimRec').hidden = true;
+        const type = recorder.mimeType || mime || 'video/webm';
+        const blob = new Blob(recChunks, { type });
+        send({ t: 'rec-state', on: false });
+        const ext = type.includes('mp4') ? 'mp4' : 'webm';
+        await sendFile(blob, 'video', `TetherCam_${stamp()}.${ext}`);
+      };
+      recorder.start(1000);
+      recStart = Date.now();
+      $('camRec').hidden = false; $('dimRec').hidden = false; $('camRec').textContent = '00:00';
+      recTimer = setInterval(() => $('camRec').textContent = fmtTime((Date.now() - recStart) / 1000), 500);
+      send({ t: 'rec-state', on: true, start: recStart });
+      break;
+    }
+    case 'rec-stop':
+      if (recorder && recorder.state === 'recording') recorder.stop();
+      break;
+    case 'flip':
+      if (recorder && recorder.state === 'recording') return;
+      facing = facing === 'environment' ? 'user' : 'environment';
+      await openCamera();
+      await replaceSenderTracks();
+      send(camCaps());
+      break;
+    case 'zoom': {
+      const t = videoTrack();
+      try { await t.applyConstraints({ advanced: [{ zoom: d.v }] }); } catch {}
+      break;
+    }
+    case 'torch': {
+      const t = videoTrack();
+      try { await t.applyConstraints({ advanced: [{ torch: !!d.on }] }); torchOn = !!d.on; } catch {}
+      send(camCaps());
+      break;
+    }
+    case 'hello':
+      send(camCaps());
+      break;
+  }
+}
+
+$('camHideCode').onclick = () => {
+  const c = $('codeCard'); c.hidden = !c.hidden;
+  $('camHideCode').textContent = c.hidden ? 'Show code' : 'Hide code';
+};
+$('camDimBtn').onclick = () => { $('dim').hidden = false; };
+$('dim').onclick = () => { $('dim').hidden = true; };
+$('camExit').onclick = () => {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  if (camPeer) { try { camPeer.destroy(); } catch {} camPeer = null; }
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = null; camConn = null; camCall = null;
+  store.set('role', '');
+  show('home');
+};
+
+/* =========================== REMOTE ROLE =========================== */
+let remPeer = null, remConn = null, caps = {};
+let mode = 'photo', timerSecs = 0, gridOn = false, recording = false, remRecTimer = null;
+const gallery = []; let incoming = null, unseen = 0, viewIdx = -1;
+
+function setRemStatus(text, state) { $('remStatus').textContent = text; $('remDot').className = 'dot ' + state; }
+
+function startRemoteRole() {
+  show('remote');
+  $('connectPane').hidden = false;
+  const last = store.get('lastCode') || '';
+  $('codeIn').value = last;
+  $('connErr').textContent = '';
+  setTimeout(() => $('codeIn').focus(), 50);
+}
+$('codeIn').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+});
+$('connBack').onclick = () => { store.set('role', ''); show('home'); };
+
+$('connectForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const code = $('codeIn').value.trim().toUpperCase();
+  if (code.length !== 4) { $('connErr').textContent = 'The code has 4 characters.'; return; }
+  connectTo(code);
+});
+
+function connectTo(code) {
+  $('connErr').textContent = '';
+  $('connectBtn').disabled = true; $('connectBtn').textContent = 'Connecting…';
+  store.set('lastCode', code);
+  if (remPeer) { try { remPeer.destroy(); } catch {} }
+  remPeer = new Peer(PEER_OPTS);
+  const fail = msg => {
+    $('connectBtn').disabled = false; $('connectBtn').textContent = 'Connect';
+    $('connectPane').hidden = false; $('connErr').textContent = msg;
+  };
+  const failT = setTimeout(() => { if (!remConn || !remConn.open) fail('No answer. Check that the camera phone shows this code and has internet.'); }, 15000);
+  remPeer.on('open', () => {
+    const conn = remPeer.connect(PREFIX + code, { reliable: true, serialization: 'binary' });
+    remConn = conn;
+    conn.on('open', () => {
+      clearTimeout(failT);
+      $('connectPane').hidden = true;
+      $('connectBtn').disabled = false; $('connectBtn').textContent = 'Connect';
+      setRemStatus('Connected · ' + code, 'ok');
+      $('remWaiting').hidden = false;
+      keepAwake();
+      conn.send({ t: 'hello' });
+    });
+    conn.on('data', onRemData);
+    conn.on('close', () => {
+      if (remConn !== conn) return;
+      setRemStatus('Camera disconnected', 'bad');
+      enableControls(false);
+      toast('Lost the camera. Tap ‹ to reconnect.');
+    });
+  });
+  remPeer.on('call', call => {
+    call.answer();
+    call.on('stream', s => {
+      const v = $('remVideo'); v.srcObject = s;
+      v.play().catch(() => {});
+      $('remWaiting').hidden = true;
+      enableControls(true);
+    });
+  });
+  remPeer.on('error', err => {
+    clearTimeout(failT);
+    if (err.type === 'peer-unavailable') fail(`No camera is using code ${code}. Check the code on the camera phone.`);
+    else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') fail('Could not reach the connection server. Check your internet.');
+    else fail('Connection problem: ' + err.type);
+  });
+}
+
+function enableControls(on) {
+  $('shutter').disabled = !on;
+  $('btnFlip').disabled = !on || recording;
+  $('btnTorch').disabled = !on || !caps.torch;
+}
+
+function applyCaps(c) {
+  caps = c;
+  $('btnTorch').disabled = !c.torch;
+  $('btnTorch').classList.toggle('on', !!c.torchOn);
+  if (c.zoom && c.zoom.max > c.zoom.min) {
+    const z = $('zoom');
+    z.min = c.zoom.min; z.max = c.zoom.max; z.step = c.zoom.step || 0.1; z.value = c.zoom.value;
+    $('zoomOut').textContent = Number(c.zoom.value).toFixed(1) + '×';
+    $('zoomRow').hidden = false;
+  } else $('zoomRow').hidden = true;
+  if (c.recording !== undefined) setRecording(c.recording, null);
+}
+
+function onRemData(d) {
+  if (d instanceof ArrayBuffer || ArrayBuffer.isView(d)) {
+    if (!incoming) return;
+    incoming.parts.push(d); incoming.got += d.byteLength;
+    $('prog').style.width = Math.min(100, incoming.got / incoming.size * 100) + '%';
+    return;
+  }
+  if (!d || typeof d !== 'object') return;
+  switch (d.t) {
+    case 'caps': applyCaps(d); break;
+    case 'countdown': countdownOn($('remCount'), d.s); break;
+    case 'snapped': flash($('remFlash')); break;
+    case 'rec-state': setRecording(d.on, d.start); break;
+    case 'file-start':
+      incoming = { ...d, parts: [], got: 0 };
+      $('prog').style.width = '0%';
+      if (d.kind === 'video') toast('Receiving video · ' + fmtBytes(d.size), 4000);
+      break;
+    case 'file-end': {
+      if (!incoming) return;
+      const blob = new Blob(incoming.parts, { type: incoming.mime });
+      const item = { blob, url: URL.createObjectURL(blob), kind: incoming.kind, name: incoming.name, size: incoming.size, w: 0, h: 0 };
+      gallery.push(item);
+      incoming = null;
+      $('prog').style.width = '0%';
+      setThumb(item);
+      unseen++; updateBadge();
+      if (item.kind === 'photo') {
+        const im = new Image(); im.onload = () => { item.w = im.naturalWidth; item.h = im.naturalHeight; toast(`Photo saved here · ${item.w}×${item.h}`); }; im.src = item.url;
+      } else toast('Video received · tap the thumbnail to save');
+      break;
+    }
+    case 'error': toast('Camera: ' + d.msg, 4000); break;
+  }
+}
+
+function setThumb(item) {
+  const th = $('thumb');
+  if (item.kind === 'photo') th.style.backgroundImage = `url("${item.url}")`;
+  else posterFor(item).then(u => { if (u) th.style.backgroundImage = `url("${u}")`; });
+}
+function posterFor(item) {
+  if (item.poster) return Promise.resolve(item.poster);
+  return new Promise(res => {
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = item.url;
+    const done = u => { item.poster = u; res(u); };
+    v.addEventListener('loadeddata', () => { try { v.currentTime = Math.min(0.2, v.duration || 0); } catch { done(null); } }, { once: true });
+    v.addEventListener('seeked', () => {
+      try { const c = document.createElement('canvas'); c.width = 160; c.height = Math.round(160 * v.videoHeight / v.videoWidth) || 90;
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); done(c.toDataURL('image/jpeg', .7)); } catch { done(null); }
+    }, { once: true });
+    v.addEventListener('error', () => done(null), { once: true });
+  });
+}
+function updateBadge() {
+  let b = $('thumb').querySelector('.badge');
+  if (!unseen) { if (b) b.remove(); return; }
+  if (!b) { b = document.createElement('span'); b.className = 'badge'; $('thumb').appendChild(b); }
+  b.textContent = unseen;
+}
+
+function setRecording(on, start) {
+  recording = !!on;
+  $('shutter').classList.toggle('recording', recording);
+  $('btnFlip').disabled = recording || $('shutter').disabled;
+  $('modePhoto').disabled = recording;
+  clearInterval(remRecTimer);
+  if (recording) {
+    const t0 = start || Date.now();
+    $('remRec').hidden = false;
+    remRecTimer = setInterval(() => $('remRec').textContent = fmtTime((Date.now() - t0) / 1000), 500);
+  } else $('remRec').hidden = true;
+  $('shutter').setAttribute('aria-label', mode === 'photo' ? 'Take photo' : recording ? 'Stop recording' : 'Start recording');
+}
+
+function setMode(m) {
+  if (recording) return;
+  mode = m;
+  $('modePhoto').setAttribute('aria-pressed', m === 'photo');
+  $('modeVideo').setAttribute('aria-pressed', m === 'video');
+  $('shutter').classList.toggle('video', m === 'video');
+  $('shutter').setAttribute('aria-label', m === 'photo' ? 'Take photo' : 'Start recording');
+}
+$('modePhoto').onclick = () => setMode('photo');
+$('modeVideo').onclick = () => setMode('video');
+
+function rsend(m) { if (remConn && remConn.open) remConn.send(m); }
+
+$('shutter').onclick = () => {
+  if (mode === 'photo') rsend({ t: 'photo', delay: timerSecs });
+  else if (recording) rsend({ t: 'rec-stop' });
+  else rsend({ t: 'rec-start', delay: timerSecs });
+};
+// volume keys can't be captured in browsers; Enter / space works with a Bluetooth keyboard or clicker
+document.addEventListener('keydown', e => {
+  if ($('remote').hidden || !$('connectPane').hidden || !$('viewer').hidden) return;
+  if ((e.key === ' ' || e.key === 'Enter' || e.key === 'AudioVolumeUp') && !$('shutter').disabled) { e.preventDefault(); $('shutter').click(); }
+});
+
+const TIMERS = [0, 3, 10];
+$('btnTimer').onclick = () => {
+  timerSecs = TIMERS[(TIMERS.indexOf(timerSecs) + 1) % TIMERS.length];
+  $('timerLbl').textContent = timerSecs ? timerSecs + 's' : 'OFF';
+  $('btnTimer').classList.toggle('on', timerSecs > 0);
+};
+$('btnTorch').onclick = () => rsend({ t: 'torch', on: !caps.torchOn });
+$('btnGrid').onclick = () => { gridOn = !gridOn; $('remGrid').hidden = !gridOn; $('btnGrid').classList.toggle('on', gridOn); };
+$('btnFlip').onclick = () => rsend({ t: 'flip' });
+
+let zoomT = null;
+$('zoom').addEventListener('input', e => {
+  const v = Number(e.target.value);
+  $('zoomOut').textContent = v.toFixed(1) + '×';
+  clearTimeout(zoomT); zoomT = setTimeout(() => rsend({ t: 'zoom', v }), 40);
+});
+
+$('remBack').onclick = () => {
+  if (remPeer) { try { remPeer.destroy(); } catch {} remPeer = null; }
+  remConn = null; $('remVideo').srcObject = null;
+  setRecording(false); enableControls(false);
+  setRemStatus('Not connected', 'bad');
+  $('connectPane').hidden = false;
+};
+
+/* Viewer */
+$('thumb').onclick = () => { if (gallery.length) openViewer(gallery.length - 1); else toast('Nothing captured yet'); };
+function openViewer(i) {
+  unseen = 0; updateBadge();
+  $('viewer').hidden = false;
+  viewIdx = i; renderViewer();
+}
+function renderViewer() {
+  const it = gallery[viewIdx];
+  const m = $('vMedia'); m.innerHTML = '';
+  let el;
+  if (it.kind === 'photo') { el = document.createElement('img'); el.alt = it.name; }
+  else { el = document.createElement('video'); el.controls = true; el.playsInline = true; }
+  el.src = it.url; m.appendChild(el);
+  $('vMeta').textContent = `${it.name} · ${fmtBytes(it.size)}${it.w ? ` · ${it.w}×${it.h}` : ''}`;
+  const s = $('vStrip'); s.innerHTML = '';
+  gallery.forEach((g, j) => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = (j === viewIdx ? 'sel ' : '') + (g.kind === 'video' ? 'vid' : '');
+    b.setAttribute('aria-label', g.name);
+    if (g.kind === 'photo') b.style.backgroundImage = `url("${g.url}")`;
+    else posterFor(g).then(u => { if (u) b.style.backgroundImage = `url("${u}")`; });
+    b.onclick = () => { viewIdx = j; renderViewer(); };
+    s.appendChild(b);
+  });
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File([it.blob], it.name, { type: it.blob.type })] }));
+  $('vShare').hidden = !canShare;
+}
+$('vClose').onclick = () => { $('viewer').hidden = true; $('vMedia').innerHTML = ''; };
+$('vSave').onclick = () => {
+  const it = gallery[viewIdx];
+  const a = document.createElement('a'); a.href = it.url; a.download = it.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Saved to Downloads');
+};
+$('vShare').onclick = async () => {
+  const it = gallery[viewIdx];
+  try { await navigator.share({ files: [new File([it.blob], it.name, { type: it.blob.type })] }); } catch {}
+};
+
+window.addEventListener('beforeunload', e => {
+  if (gallery.length && !$('remote').hidden) { e.preventDefault(); e.returnValue = ''; }
+});
+
+/* Resume last role */
+const lastRole = store.get('role');
+if (lastRole === 'cam') { /* need a tap for some browsers; show home but highlight */ $('pickCam').style.borderColor = 'var(--accent)'; }
+if (lastRole === 'remote') { $('pickRemote').style.borderColor = 'var(--accent)'; }
+})();
+</script>
+</body>
+</html>
