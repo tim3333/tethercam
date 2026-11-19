@@ -32,8 +32,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
 
 /* Home */
-#home { padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); justify-content: center; align-items: center; overflow-y: auto; }
-.home-inner { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 28px; }
+#home { padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); overflow-y: auto; }
+.home-inner { width: 100%; max-width: 440px; margin: auto; display: flex; flex-direction: column; gap: 28px; }
 .brand { font: 700 34px/1.05 var(--display); letter-spacing: -.02em; margin: 0; }
 .brand span { color: var(--accent); }
 .lede { color: var(--muted); margin: 8px 0 0; }
@@ -44,7 +44,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .role svg { grid-row: span 2; width: 52px; height: 52px; padding: 12px; border-radius: 14px; background: #1b201e; color: var(--accent); }
 .role b { font: 600 17px var(--display); }
 .role small { color: var(--muted); font-size: 13px; }
-.foot { color: var(--muted); font-size: 12.5px; }
+.foot { color: var(--muted); font-size: 12.5px; margin: 0; }
+.settings { border: 1px solid var(--line); border-radius: 14px; background: #121514; }
+.settings summary { padding: 14px 16px; font-weight: 600; cursor: pointer; }
+.settings summary span { color: var(--ok); font-weight: 500; font-size: 13px; margin-left: 6px; }
+.settings-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; color: var(--muted); }
+.settings-body p { margin: 0; }
+.settings-body b { color: var(--fg); }
+.settings form { display: flex; flex-direction: column; gap: 6px; }
+.settings label { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin-top: 6px; }
+.settings input { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 14px var(--body); }
+.settings .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.settings .hint { font-size: 12px; }
 
 /* Shared viewfinder */
 video.vf { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
@@ -152,6 +163,26 @@ video.vf { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: 
       </button>
     </div>
     <p class="foot">Both phones need internet (same Wi-Fi works best). Photos and videos travel straight from phone to phone and are saved on the remote.</p>
+    <details class="settings" id="settings">
+      <summary>Connection settings <span id="relayState"></span></summary>
+      <div class="settings-body">
+        <p><b>Phones won't link?</b> Turn on the S26's mobile hotspot and join it from the S21 (Settings › Connections › Wi-Fi), then try again. Traffic between the two phones stays local and doesn't use mobile data, apart from the brief pairing step.</p>
+        <p>If your router blocks phone-to-phone links, add a relay (TURN) server. A free account at a TURN provider gives you a server address, username and password. Enter the same details on <b>both</b> phones.</p>
+        <form id="relayForm" autocomplete="off">
+          <label for="relayUrl">Server address(es)</label>
+          <input id="relayUrl" placeholder="turn:relay.example.com:3478" spellcheck="false" autocapitalize="off">
+          <label for="relayUser">Username</label>
+          <input id="relayUser" spellcheck="false" autocapitalize="off">
+          <label for="relayPass">Password</label>
+          <input id="relayPass" type="password">
+          <div class="row">
+            <button class="txtbtn primary" type="submit">Save relay</button>
+            <button class="txtbtn" type="button" id="relayClear">Remove</button>
+          </div>
+          <p class="hint">These details are saved only in this phone's browser.</p>
+        </form>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -260,11 +291,31 @@ video.vf { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: 
 'use strict';
 const PREFIX = 'tethercam-v1-';
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-const PEER_OPTS = { debug: 1, config: { iceServers: [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478' }
-] } };
+function loadRelay() {
+  try { const r = JSON.parse(localStorage.getItem('relay') || 'null'); return r && r.url ? r : null; } catch { return null; }
+}
+function peerOpts() {
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' }
+  ];
+  const r = loadRelay();
+  if (r) iceServers.push({ urls: r.url.split(/[\s,]+/).filter(Boolean), username: r.user, credential: r.pass });
+  return { debug: 1, config: { iceServers } };
+}
+// After a link forms, find out whether it goes straight across the Wi-Fi or through the relay
+async function routeType(pc) {
+  try {
+    const stats = await pc.getStats();
+    let pair = null;
+    stats.forEach(s => { if (s.type === 'candidate-pair' && s.state === 'succeeded' && (s.nominated || s.selected)) pair = pair || s; });
+    if (!pair) return '';
+    const local = stats.get(pair.localCandidateId), remote = stats.get(pair.remoteCandidateId);
+    const types = [local && local.candidateType, remote && remote.candidateType];
+    return types.includes('relay') ? 'via relay' : 'direct';
+  } catch { return ''; }
+}
 const ICE_WORDS = { new: 'starting', checking: 'finding a route', connected: 'linked', completed: 'linked', failed: 'route failed', disconnected: 'dropped', closed: 'closed' };
 // Reports the phone-to-phone link state of a PeerJS connection while it is being set up
 function watchIce(conn, report) {
@@ -310,7 +361,25 @@ if (typeof Peer === 'undefined') {
   document.querySelector('.foot').textContent = 'Could not load the connection library. Check your internet connection and reload.';
 }
 
-$('pickCam').onclick = () => { store.set('role', 'cam'); startCameraRole(); };
+function showRelayState() {
+  const r = loadRelay();
+  $('relayState').textContent = r ? '· relay on' : '';
+  if (r) { $('relayUrl').value = r.url; $('relayUser').value = r.user || ''; $('relayPass').value = r.pass || ''; }
+}
+$('relayForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const url = $('relayUrl').value.trim();
+  if (!/^turns?:/i.test(url)) { toast('The address should start with turn: or turns:'); return; }
+  store.set('relay', JSON.stringify({ url, user: $('relayUser').value.trim(), pass: $('relayPass').value }));
+  showRelayState(); toast('Relay saved. Set it up on the other phone too.');
+});
+$('relayClear').onclick = () => {
+  store.set('relay', ''); $('relayUrl').value = $('relayUser').value = $('relayPass').value = '';
+  showRelayState(); toast('Relay removed');
+};
+showRelayState();
+
+$('pickCam').onclick =() => { store.set('role', 'cam'); startCameraRole(); };
 $('pickRemote').onclick = () => { store.set('role', 'remote'); startRemoteRole(); };
 
 /* =========================== CAMERA ROLE =========================== */
@@ -383,7 +452,7 @@ function registerCamPeer(code) {
   $('camCode').textContent = code;
   setCamStatus('Getting online…', 'wait');
   if (camPeer) { try { camPeer.destroy(); } catch {} }
-  camPeer = new Peer(PREFIX + code, PEER_OPTS);
+  camPeer = new Peer(PREFIX + code, peerOpts());
   camPeer.on('open', () => setCamStatus('Ready. Waiting for the remote', 'wait'));
   camPeer.on('error', err => {
     if (err.type === 'unavailable-id') { registerCamPeer(newCode()); return; }
@@ -400,9 +469,14 @@ function registerCamPeer(code) {
     if (camCall) { try { camCall.close(); } catch {} }
     camConn = conn;
     setCamStatus('Remote found · linking…', 'wait');
-    watchIce(conn, (s, w) => { if (!conn.open) setCamStatus('Remote found · ' + w, s === 'failed' ? 'bad' : 'wait'); });
+    watchIce(conn, (s, w) => {
+      if (camConn !== conn || conn.open) return;
+      const stuck = s === 'failed' || s === 'disconnected';
+      setCamStatus('Remote found · ' + w + (stuck ? (loadRelay() ? '' : ' · add a relay in Connection settings') : ''), stuck ? 'bad' : 'wait');
+    });
     conn.on('open', () => {
       setCamStatus('Remote connected', 'ok');
+      routeType(conn.peerConnection).then(r => { if (r && camConn === conn) setCamStatus('Remote connected · ' + r, 'ok'); });
       $('codeCard').hidden = true; $('camHideCode').textContent = 'Show code';
       camCall = camPeer.call(conn.peer, camStream);
       send(camCaps());
@@ -597,7 +671,7 @@ async function connectTo(code) {
   $('connectBtn').disabled = true; $('connectBtn').textContent = 'Connecting…';
   store.set('lastCode', code);
   if (remPeer) { try { remPeer.destroy(); } catch {} }
-  remPeer = new Peer(PEER_OPTS);
+  remPeer = new Peer(peerOpts());
   const fail = msg => {
     $('connectBtn').disabled = false; $('connectBtn').textContent = 'Connect';
     $('connectPane').hidden = false; $('connErr').textContent = msg;
@@ -610,15 +684,21 @@ async function connectTo(code) {
     if (remConn && remConn.open) return;
     const s = iceState();
     if (!s || s === 'new') fail(`No answer while ${stage}. Make sure the camera phone is on its "Waiting for the remote" screen, then try again.`);
-    else { fail(`The phones found each other but could not link (${ICE_WORDS[s] || s}). Tap "Retry with Wi-Fi boost" below.`); $('boostBtn').hidden = false; $('boostNote').hidden = false; }
+    else {
+      const boosted = store.get('boost') === '1';
+      fail(`The phones found each other but could not link (${ICE_WORDS[s] || s}). ` +
+        (!boosted ? 'Tap "Retry with Wi-Fi boost" below.' : loadRelay() ? 'Check the relay details in Connection settings on the home screen.' : 'Your router is blocking the link. Try the hotspot test or add a relay in Connection settings on the home screen.'));
+      if (!boosted) { $('boostBtn').hidden = false; $('boostNote').hidden = false; }
+    }
   }, 30000);
   remPeer.on('open', () => {
     progress('looking for the camera');
     const conn = remPeer.connect(PREFIX + code, { reliable: true, serialization: 'binary' });
     remConn = conn;
-    iceState = watchIce(conn, (s, w) => { if (!conn.open) progress(w); });
+    iceState = watchIce(conn, (s, w) => { if (remConn === conn && !conn.open) progress(w); });
     conn.on('open', () => {
       clearTimeout(failT);
+      routeType(conn.peerConnection).then(r => { if (r && remConn === conn) setRemStatus('Connected · ' + code + ' · ' + r, 'ok'); });
       $('connectPane').hidden = true;
       $('connectBtn').disabled = false; $('connectBtn').textContent = 'Connect';
       setRemStatus('Connected · ' + code, 'ok');
